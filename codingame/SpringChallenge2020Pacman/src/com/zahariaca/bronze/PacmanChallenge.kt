@@ -14,22 +14,48 @@ fun main(args: Array<String>) {
 
     // game loop
     // TODO: Find way to avoid conflict with other pacmen
+    var firstRound = true;
+    var pacmanList = mutableMapOf<Int, Pacman>()
+    var rounds = 0
     while (true) {
         val myScore = input.nextInt()
         val opponentScore = input.nextInt()
 
-        var pacmanList = createMyPacmen(input, grid)
-        val allPelletNodes = createAllPelletNodes(input, grid)
+        // TODO: Pacmen cannot be created before grid and nodes are properly populated...
+        pacmanList = createMyPacmen(input, grid, firstRound, pacmanList)
 
-        pacmanList.forEach {
-            it.allPelletNodes = allPelletNodes
-            System.err.println("[${it.id}] All valid moves: ${it.validMoves}")
+        val visiblePelletCount = input.nextInt() // all pellets in sight
+        val allPellets1 = arrayListOf<Node>()
+        for (i in 0 until visiblePelletCount) {
+            val x = input.nextInt()
+            val y = input.nextInt()
+            val value = input.nextInt() // amount of points this pellet is worth
+            val pelletNode = grid.getNode(x, y)
+            pelletNode.pelletValue = value
+            val pelletN = Node(true, Coordinate(x, y), value)
+            allPellets1.add(pelletN)
+        }
+        val livePacmen = pacmanList.values.filter {
+            it.isAlive
         }
 
-        println(pacmanList.joinToString(separator = "|") {
-            grid.getNode(it.getTargetNode().coordinates).pelletValue = 0
-            printCommand(it.id, it.getTargetNode().coordinates)
+        livePacmen.forEach {
+            it.allPelletNodes = allPellets1
+            it.node.neighbours = calculatePossibilities(it.node, grid)
+            for (n in it.node.neighbours) {
+                n.neighbours = calculatePossibilities(n, grid)
+            }
+            System.err.println("[${it.id}] All valid moves: ${it.node.neighbours}\n")
+            for (n in it.node.neighbours) {
+                System.err.println("    all neighbourMoves: ${n.neighbours}")
+            }
+        }
+
+        println(livePacmen.joinToString(separator = "|") {
+            printCommand(it.id, it.getTargetNodeAndPresumeDead().coordinates, rounds)
         })
+        rounds += 1
+        grid.resetPelletValue()
     }
 }
 
@@ -57,10 +83,11 @@ private fun createGrid(input: Scanner): Grid {
 
 private fun createMyPacmen(
     input: Scanner,
-    grid: Grid
-): MutableList<Pacman> {
+    grid: Grid,
+    firstRound: Boolean,
+    pacmanList: MutableMap<Int, Pacman>
+): MutableMap<Int, Pacman> {
     val visiblePacCount = input.nextInt() // all your pacs and enemy pacs in sight
-    val pacmanList = mutableListOf<Pacman>()
     var pacman: Pacman
     for (i in 0 until visiblePacCount) {
         val pacId = input.nextInt() // pac number (unique within a team)
@@ -71,92 +98,96 @@ private fun createMyPacmen(
         val speedTurnsLeft = input.nextInt() // unused in wood leagues
         val abilityCooldown = input.nextInt() // unused in wood leagues
         if (mine) {
-            // TODO save instancesof pacman
             val currentPacmanNode = grid.getNode(x, y)
-            pacman = Pacman(pacId, currentPacmanNode, grid, typeId, speedTurnsLeft, abilityCooldown)
-            pacmanList.add(pacman)
+            if (firstRound) {
+                pacman = Pacman(pacId, currentPacmanNode, typeId, speedTurnsLeft, abilityCooldown, true)
+                pacmanList[pacId] = pacman
+            } else {
+                val oldPacman = pacmanList[pacId]
+                oldPacman!!.node = currentPacmanNode
+                oldPacman.typeId = typeId
+                oldPacman.speedTurnsLeft = speedTurnsLeft
+                oldPacman.abilityCooldown = abilityCooldown
+                oldPacman.isAlive = true
+            }
         }
     }
     return pacmanList
 }
 
-private fun createAllPelletNodes(input: Scanner, grid: Grid): ArrayList<Node> {
-    val visiblePelletCount = input.nextInt() // all pellets in sight
-    val allPellets1 = arrayListOf<Node>()
-    for (i in 0 until visiblePelletCount) {
-        val x = input.nextInt()
-        val y = input.nextInt()
-        val value = input.nextInt() // amount of points this pellet is worth
-        val pelletNode = grid.getNode(x, y)
-        pelletNode.pelletValue = value
-        val pelletN = Node(true, Coordinate(x, y), value)
-        allPellets1.add(pelletN)
+fun printCommand(pacmanId: Int, coordinates: Coordinate<Int, Int>, rounds: Int): String {
+    if (rounds == 0 || rounds % 10 == 0) {
+        return "SPEED $pacmanId"
     }
-    return allPellets1
+    return "MOVE $pacmanId ${coordinates.x} ${coordinates.y}"
 }
 
-fun printCommand(pacmanId: Int, coordinates: Coordinate<Int, Int>): String {
-    return "MOVE $pacmanId ${coordinates.x} ${coordinates.y}"
+fun calculatePossibilities(center: Node, grid: Grid): List<Node> {
+    val neighbours = mutableListOf<Node>()
+    for (x in -1..1) {
+        for (y in -1..1) {
+            /*if (x == 0 && y == 0
+                || x==-1 && y ==-1
+                || x==1 && y==-1
+                || x==1 && y==1
+                || x==-1 && y==1) {
+                continue
+            }*/
+            if (x == 0 && y == 0) continue
+
+            val checkX = center.coordinates.x + x
+            val checkY = center.coordinates.y + y
+            // TODO: externalize gridSize*
+            if (checkX >= 0
+                && checkY >= 0
+                && checkX < grid.gridSizeX
+                && checkY < grid.gridSizeY
+                && grid.getNode(checkX, checkY).walkable
+                && grid.getNode(checkX, checkY).pelletValue > 0
+            ) {
+                val neighbourNode = grid.getNode(checkX, checkY)
+                neighbourNode.gCost = center.gCost + calculateDistance(center, neighbourNode)
+                neighbours.add(neighbourNode)
+            }
+        }
+    }
+
+    return neighbours
+}
+
+fun calculateDistance(nodeA: Node, nodeB: Node): Int {
+    val dstX = abs(nodeA.coordinates.x - nodeB.coordinates.x)
+    val dstY = abs(nodeA.coordinates.y - nodeB.coordinates.y)
+
+    return if (dstX > dstY) 14 * dstY + 10 * (dstX - dstY) else 14 * dstX + 10 * (dstY - dstX)
 }
 
 data class Pacman(
     val id: Int,
-    val node: Node,
-    val grid: Grid,
-    val typeId: String,
-    val speedTurnsLeft: Int,
-    val abilityCooldown: Int
+    var node: Node,
+    var typeId: String,
+    var speedTurnsLeft: Int,
+    var abilityCooldown: Int,
+    var isAlive: Boolean = false
 ) {
-    val validMoves: List<Node>
-    var allPelletNodes: List<Node> = arrayListOf()
+    lateinit var allPelletNodes: List<Node>
 
-    init {
-        validMoves = calculatePossibilities()
-            .filter { grid.getNode(it.coordinates).walkable }.toList()
-    }
-
-    fun calculatePossibilities(): List<Node> {
-        val neighbours = mutableListOf<Node>()
-        for (x in -1..1) {
-            for (y in -1..1) {
-                if (x == 0 && y == 0) continue
-
-                val checkX = node.coordinates.x + x
-                val checkY = node.coordinates.y + y
-//                System.err.println("[${id}] for x=$x for y=$y possible x=$checkX possible y= $checkY")
-                if (checkX >= 0
-                    && checkY >= 0
-                    && checkX < grid.gridSizeX
-                    && checkY < grid.gridSizeY
-                    && grid.getNode(checkX, checkY).walkable
-                    && grid.getNode(checkX, checkY).pelletValue > 0
-                ) {
-                    neighbours.add(grid.getNode(checkX, checkY))
-                }
-            }
+    fun getTargetNodeAndPresumeDead(): Node {
+        isAlive = false
+        /*if (validMoves.isEmpty()) {
+            return allPelletNodes.minBy { calculateDistance(node, it) }
+                ?: Node(false, Coordinate(0, 0), -1)
         }
+        return validMoves[0]*/
+        var result = node.neighbours.find { it.pelletValue == 10 }
+            ?: node.neighbours.find { it.pelletValue == 1 }
+            ?: allPelletNodes.filter { it.pelletValue == 10 }.minBy { calculateDistance(node, it) }
+            ?: allPelletNodes.filter { it.pelletValue == 1 }.minBy { calculateDistance(node, it) }
+            ?: Node(false, Coordinate(0, 0), -1)
+        System.err.println("Pacman [$id] has chosen: $result")
+        result.pelletValue = 0
+        return result
 
-        return neighbours
-    }
-
-    fun getTargetNode(): Node {
-        if (validMoves.isEmpty()) {
-            return  allPelletNodes.minBy { distanceFromPacman(node, it) }
-                ?: Node(false, Coordinate(0, 0),-1)
-        }
-        return validMoves[0]
-        /*return validMoves.find { System.err.println("[$id] condition: it.pelletValue == 10"); it.pelletValue == 10 }
-            ?: validMoves.find { System.err.println("[$id] condition: it.pelletValue == 1"); it.pelletValue == 1 }
-            ?: allPelletNodes.filter { it.pelletValue == 10}.minBy { distanceFromPacman(node, it) }
-            ?: allPelletNodes.filter {it.pelletValue == 1 }.minBy { distanceFromPacman(node, it) }
-            ?: Node(false, Coordinate(0, 0),-1)*/
-    }
-
-    private fun distanceFromPacman(nodeA: Node, nodeB: Node): Int {
-        val dstX = abs(nodeA.coordinates.x - nodeB.coordinates.x)
-        val dstY = abs(nodeA.coordinates.y - nodeB.coordinates.y)
-
-        return if (dstX > dstY) 14 * dstY + 10 * (dstX - dstY) else 14 * dstX + 10 * (dstY - dstX)
     }
 }
 
@@ -168,13 +199,24 @@ class Grid(val gridSizeX: Int, val gridSizeY: Int, val grid: MutableList<ArrayLi
     fun getNode(x: Int, y: Int): Node {
         return grid[y][x]
     }
+
+    fun resetPelletValue() {
+        for (l in grid) {
+            for (n in l) {
+                n.pelletValue = 0
+            }
+        }
+    }
 }
 
 data class Node(
     val walkable: Boolean,
     val coordinates: Coordinate<Int, Int>,
-    var pelletValue: Int = 0
-) {}
+    var pelletValue: Int = 0,
+    var gCost: Int = 0
+) {
+    lateinit var neighbours: List<Node>
+}
 
 data class Coordinate<out A, out B>(
     val x: A,
