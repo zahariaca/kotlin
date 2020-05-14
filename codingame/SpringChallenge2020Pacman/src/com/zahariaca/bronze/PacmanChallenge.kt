@@ -9,7 +9,6 @@ fun main(args: Array<String>) {
     val grid = createGrid(input)
 
     // game loop
-    var rounds = 0
     val pacmanMap = mutableMapOf<Int, Pacman>()
     val enemyList = mutableListOf<Pacman>()
     while (true) {
@@ -25,10 +24,11 @@ fun main(args: Array<String>) {
             val speedTurnsLeft = input.nextInt() // unused in wood leagues
             val abilityCooldown = input.nextInt() // unused in wood leagues
             if (mine) {
-                if (rounds == 0) {
-                    val pacman = Pacman(pacId, Node(true, Coordinate(x, y)), typeId, speedTurnsLeft, abilityCooldown, true)
-                    pacman.positionLastTurn = grid.getNode(Coordinate(x,y))
-                    pacman.target = grid.getNode(Coordinate(x,y))
+                if (myScore == 0 && opponentScore == 0) {
+                    val pacman =
+                        Pacman(pacId, Node(true, Coordinate(x, y)), typeId, speedTurnsLeft, abilityCooldown, true)
+                    pacman.positionLastTurn = grid.getNode(Coordinate(x, y))
+                    pacman.target = grid.getNode(Coordinate(x, y))
                     pacmanMap[pacId] = pacman
 
                 } else {
@@ -52,63 +52,43 @@ fun main(args: Array<String>) {
             pellets += Pellet(Node(true, Coordinate(x, y)), value)
         }
         val livePacmen = pacmanMap.filter { entry -> entry.value.isAlive }.values
-
-        livePacmen.forEach { pacman ->
-            pacman.neighbors = grid.getNeighbour(pacman.node)
-            pacman.neighbors.forEach { neighbor ->
-                neighbor.hasEnemy = false
-                if (enemyList.map { it.node }.contains(neighbor)) {
-                    System.err.println("Enemy close! : $neighbor")
-                    neighbor.hasEnemy = true;
-                }
-            }
-        }
-
-        val normalPellets = pellets.filter { it.value == 1 }.toMutableList()
         val superPellets = pellets.filter { it.value == 10 }.toMutableList()
-        System.err.println("All super pellets: $superPellets")
-        var closestSP: Node? = null
-        val commandString = mutableListOf<String>()
+        val normalPellets = pellets.filter { it.value == 1 }.toMutableList()
 
-        if (rounds == 0 || rounds % 10 == 0) {
-            livePacmen.forEach { pacman ->
-                commandString += "SPEED ${pacman.id}"
-            }
-        } else {
-            livePacmen.forEach { pacman ->
-                System.err.println("Pacman: ${pacman.id} has reached his target. Recalculating target")
-                if (superPellets.isNotEmpty()) {
-                    val shortestPaths = getShortestPaths(superPellets, grid, pacman)
-                    closestSP = shortestPaths.minBy { it.size }!!.last()
-                    superPellets.removeIf { it.node == closestSP }
-                    pacman.target = closestSP as Node
-                } else if (normalPellets.isNotEmpty()) {
-                    val shortestPath = getShortestPaths(normalPellets, grid, pacman)
-                    closestSP = shortestPath.minBy { it.size }?.last()
-                    normalPellets.removeIf { it.node == closestSP }
-                    pacman.target = closestSP as Node
-                } else if (pellets.isNotEmpty() && pacman.node == pacman.target) {
-                    val randomPellet = pellets.last()
-                    pellets.remove(randomPellet)
-                    pacman.target = randomPellet.node
-                } else if (pacman.node == pacman.target || pacman.node == pacman.positionLastTurn){
-                    val randomGridNode = grid.grid.random().random()
-                    pacman.target = randomGridNode
+        val commandList = mutableListOf<Command>()
+        livePacmen.forEach { pacman ->
+            val validList = when {
+                superPellets.isNotEmpty() -> {
+                    superPellets
+                }
+                normalPellets.isNotEmpty() -> {
+                    normalPellets
+                }
+                pellets.isNotEmpty() -> {
+                    pellets
+                }
+                else -> {
+                    mutableListOf(Pellet(grid.grid.random().random(), 0))
                 }
             }
 
-            livePacmen.forEach{pacman ->
-                commandString += "MOVE ${pacman.id} ${pacman.target.coordinates.x} ${pacman.target.coordinates.y}"
-                pacman.positionLastTurn = pacman.node
-                pacman.isAlive = false
-                pacmanMap[pacman.id] = pacman
+            if (pacman.abilityCooldown == 0) {
+                commandList += Command("SPEED", pacman.id, null)
+            } else {
+                var closestSP: Node?
+                val shortestPaths = getShortestPaths(validList, grid, pacman)
+                closestSP = shortestPaths.minBy { it.size }!!.last()
+                validList.removeIf { it.node == closestSP }
+                pacman.target = closestSP as Node
+                commandList += Command("MOVE", pacman.id, pacman.target)
             }
+
+            pacman.positionLastTurn = pacman.node
+            pacman.isAlive = false
+            pacmanMap[pacman.id] = pacman
         }
 
-
-
-        println(commandString.joinToString(separator = "|")) // MOVE <pacId> <x> <y>
-        rounds++
+        println(commandList.joinToString(separator = "|") { it.getCommandString() }) // MOVE <pacId> <x> <y>
     }
 }
 
@@ -146,6 +126,16 @@ private fun createGrid(input: Scanner): Grid {
 
     val grid = Grid(width, height, grid2DArray)
     return grid
+}
+
+class Command(val command: String, val pacmanId: Int, val target: Node?) {
+    fun getCommandString(): String {
+        return if (target != null) {
+            "$command $pacmanId ${target.coordinates.x} ${target.coordinates.y}"
+        } else {
+            "$command $pacmanId"
+        }
+    }
 }
 
 class Node(
@@ -214,24 +204,6 @@ data class Pacman(
     lateinit var neighbors: List<Node>
     lateinit var positionLastTurn: Node
     lateinit var target: Node
-
-    /*fun getTargetNodeAndPresumeDead(): Node {
-        isAlive = false
-        *//*if (validMoves.isEmpty()) {
-            return allPelletNodes.minBy { calculateDistance(node, it) }
-                ?: Node(false, Coordinate(0, 0), -1)
-        }
-        return validMoves[0]*//*
-        var result = node.neighbours.find { it.pelletValue == 10 }
-            ?: node.neighbours.find { it.pelletValue == 1 }
-            ?: allPelletNodes.filter { it.pelletValue == 10 }.minBy { calculateDistance(node, it) }
-            ?: allPelletNodes.filter { it.pelletValue == 1 }.minBy { calculateDistance(node, it) }
-            ?: Node(false, Coordinate(0, 0), -1)
-        System.err.println("Pacman [$id] has chosen: $result")
-        result.pelletValue = 0
-        return result
-
-    }*/
 }
 
 data class Pellet(val node: Node, val value: Int) {
